@@ -23,7 +23,7 @@ extension DataRequest: RestClientRequestProtocol {
                 return .failure(NSError(domain: InfoUtils.bundleNameKey(), code: ErrorCode.SerializationFailed, userInfo: [NSLocalizedDescriptionKey : reason]))
             }
             
-            let json = JSON(data: validData)
+            let json = try! JSON(data: validData)
 
             return errorSanitizer(json, response!.statusCode)
         }
