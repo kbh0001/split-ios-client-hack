@@ -11,6 +11,8 @@ import Foundation
 
 public class SecureDataStore {
     
+    let tokenSemaphoe = NSRecursiveLock()
+    
     enum asset: String {
         case accessToken = "user_auth_token"
     }
@@ -26,6 +28,9 @@ public class SecureDataStore {
     // MARK: - save access token
     
     public func setToken(token: String){
+        tokenSemaphoe.lock()
+      
+        
         
         if let token = getToken() {
             Logger.d(token)
@@ -34,6 +39,7 @@ public class SecureDataStore {
         
         guard let valueData = token.data(using: String.Encoding.utf8) else {
             Logger.e("Error saving text to Keychain")
+            tokenSemaphoe.unlock()
             return
         }
         
@@ -55,12 +61,13 @@ public class SecureDataStore {
             Logger.d("Saved to keychain successfully.")
             
         }
+        tokenSemaphoe.unlock()
     }
     
     // MARK: - retrieve access token
     
     public func getToken() -> String? {
-        
+        tokenSemaphoe.lock()
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: asset.accessToken.rawValue
@@ -82,16 +89,18 @@ public class SecureDataStore {
         if lastResultCode == noErr, let dic = result as? [String:Any],let data = dic[kSecValueData as String] as? Data {
             
             if let token = String(data: data, encoding: .utf8) {
+                tokenSemaphoe.unlock()
                 return token
             }
         }
-        
+        tokenSemaphoe.unlock()
         return nil
     }
     
     // MARK: - delete access token
     
     public func removeToken() {
+        
         
         let queryDelete: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
