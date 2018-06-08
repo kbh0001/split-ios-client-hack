@@ -11,7 +11,7 @@ import Foundation
 
 public class SecureDataStore {
     
-    let tokenSemaphoe = NSRecursiveLock()
+    let tokenSemaphore = NSRecursiveLock()
     
     enum asset: String {
         case accessToken = "user_auth_token"
@@ -28,7 +28,7 @@ public class SecureDataStore {
     // MARK: - save access token
     
     public func setToken(token: String){
-        tokenSemaphoe.lock()
+        tokenSemaphore.lock()
       
         
         
@@ -39,7 +39,7 @@ public class SecureDataStore {
         
         guard let valueData = token.data(using: String.Encoding.utf8) else {
             Logger.e("Error saving text to Keychain")
-            tokenSemaphoe.unlock()
+            tokenSemaphore.unlock()
             return
         }
         
@@ -61,13 +61,13 @@ public class SecureDataStore {
             Logger.d("Saved to keychain successfully.")
             
         }
-        tokenSemaphoe.unlock()
+        tokenSemaphore.unlock()
     }
     
     // MARK: - retrieve access token
     
     public func getToken() -> String? {
-        tokenSemaphoe.lock()
+        tokenSemaphore.lock()
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: asset.accessToken.rawValue
@@ -89,18 +89,18 @@ public class SecureDataStore {
         if lastResultCode == noErr, let dic = result as? [String:Any],let data = dic[kSecValueData as String] as? Data {
             
             if let token = String(data: data, encoding: .utf8) {
-                tokenSemaphoe.unlock()
+                tokenSemaphore.unlock()
                 return token
             }
         }
-        tokenSemaphoe.unlock()
+        tokenSemaphore.unlock()
         return nil
     }
     
     // MARK: - delete access token
     
     public func removeToken() {
-        
+        tokenSemaphore.lock()
         
         let queryDelete: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -118,6 +118,8 @@ public class SecureDataStore {
             Logger.d("Removed successfully from the keychain")
             
         }
+        
+        tokenSemaphore.unlock()
         
     }
     
