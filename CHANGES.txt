@@ -1,5 +1,32 @@
+1.5.1: (Oct 3, 2018)
+- Migrating to Swift 4.2
+1.5.0: (Sep 24, 2018)
+- Adding Split Manager feature
+1.4.0: (Sep 13, 2018)
+- Adding get treatments feature
+1.3.1: (Sep 12, 2018)
+- Fixing issue when loading empty my segments Cache
+- Changing Deployment Target to 9.0
+1.3.0: (Aug 24, 2018)
+- Refactoring API methods and properties to make it more Swift style
+- Removing CocoaPods dependency
+- Improving unit tests
+1.2.9: (Aug 13, 2018)
+- Adding impression listener
+1.2.8: (Aug 3, 2018)
+- Performance improvements on Cache
+- Concurrency fixes for Cache Loading
+1.2.0: (Jul 11, 2018)
+- Adding new method to handle SDK events through a closure
+1.1.0: (Jul 03, 2018)
+- Adding Carthage support
+1.0.0: (Jun 29, 2018)
+- Adding track feature
+0.3.0: (Jun 27, 2018)
+- Removing Alamofire and SwiftyJSON dependencies
+0.2.1rc1: (May 24, 2018)
+- Adding client dependency to event background task
 0.2.0: (Apr 25, 2018)
 - Events listener has been added. Available events: SplitEvent.sdkReady and SplitEvent.sdkReadyTimedOut
 0.1.5: (Mar 19, 2018)
 - Adding first load from cache
-

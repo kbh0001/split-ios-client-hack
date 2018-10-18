@@ -8,9 +8,29 @@
 import Foundation
 
 class EnvironmentTargetManager {
+    private let kDefaultSdkBaseUrl = "https://sdk.split.io/api"
+    private let kDefaultEventsBaseUrl = "https://events.split.io/api"
     
-    var sdkBaseUrl: URL = URL(string:"https://sdk.split.io/api")!
-    var eventsBaseURL: URL = URL(string:"https://events.split.io/api")!
+    var sdkBaseUrl: URL
+    var eventsBaseURL: URL
+    
+    var eventsEndpoint: String {
+        get {
+            return eventsBaseURL.absoluteString
+        }
+        set {
+            self.eventsBaseURL = URL(string:newValue) ?? URL(string:kDefaultEventsBaseUrl)!
+        }
+    }
+    
+    var sdkEndpoint: String {
+        get {
+            return sdkBaseUrl.absoluteString
+        }
+        set {
+            self.sdkBaseUrl = URL(string:newValue) ?? URL(string:kDefaultSdkBaseUrl)!
+        }
+    }
     
     static let shared: EnvironmentTargetManager = {
         let instance = EnvironmentTargetManager()
@@ -18,32 +38,41 @@ class EnvironmentTargetManager {
     }()
     
     //Guarantee singleton instance
-    private init(){}
-    
-    public func sdkEndpoint(_ url: String) {
-        self.sdkBaseUrl = URL(string:url)!
+    private init(){
+        sdkBaseUrl = URL(string:kDefaultSdkBaseUrl)!
+        eventsBaseURL = URL(string:kDefaultEventsBaseUrl)!
     }
     
-    public func eventsEndpoint(_ url: String) {
-        self.eventsBaseURL = URL(string:url)!
-    }
-    
-    public static func GetSplitChanges(since: Int64) -> Target {
+    public static func getSplitChanges(since: Int64) -> Target {
         return DynamicTarget(shared.sdkBaseUrl,
                              shared.eventsBaseURL,
-                             DynamicTarget.DynamicTargetStatus.GetSplitChanges(since: since))
+                             DynamicTarget.DynamicTargetStatus.getSplitChanges(since: since))
     }
     
-    public static func GetMySegments(user: String) -> Target {
+    public static func getMySegments(user: String) -> Target {
         return DynamicTarget(shared.sdkBaseUrl,
                              shared.eventsBaseURL,
-                             DynamicTarget.DynamicTargetStatus.GetMySegments(user: user))
+                             DynamicTarget.DynamicTargetStatus.getMySegments(user: user))
     }
     
-    public static func GetImpressions() -> Target {
-        return DynamicTarget(shared.sdkBaseUrl,
+    public static func sendImpressions(impressions: [ImpressionsTest]) -> Target {
+        let target = DynamicTarget(shared.sdkBaseUrl,
                              shared.eventsBaseURL,
-                             DynamicTarget.DynamicTargetStatus.GetImpressions())
+                             DynamicTarget.DynamicTargetStatus.sendImpressions())
+        target.append(value: "application/json", forHttpHeader: "content-type")
+        let jsonImpressions = (try? Json.encodeToJson(impressions)) ?? "[]"
+        target.setBody(json: jsonImpressions)
+        return target
     }
     
+    public static func sendTrackEvents(events: [EventDTO]) -> Target {
+        let target = DynamicTarget(shared.sdkBaseUrl,
+                                   shared.eventsBaseURL,
+                                   DynamicTarget.DynamicTargetStatus.sendTrackEvents())
+        target.append(value: "application/json", forHttpHeader: "content-type")
+        let jsonEvents = (try? Json.encodeToJson(events)) ?? "[]"
+        target.setBody(json: jsonEvents)
+        
+        return target
+    }
 }

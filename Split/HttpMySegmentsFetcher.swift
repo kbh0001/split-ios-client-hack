@@ -7,10 +7,9 @@
 //
 
 import Foundation
-import Alamofire
 
 public final class HttpMySegmentsFetcher: NSObject, MySegmentsChangeFetcher {
-
+    
     private let restClient: RestClient
     private let storage: StorageProtocol
     private let mySegmentCache: MySegmentsCacheProtocol?
@@ -20,26 +19,13 @@ public final class HttpMySegmentsFetcher: NSObject, MySegmentsChangeFetcher {
         self.restClient = restClient
         self.storage = storage
         self.mySegmentCache = MySegmentsCache(storage: storage)
-        
     }
     
-    public func fetch(user: String) throws -> [String] {
+    public func fetch(user: String, policy: FecthingPolicy) throws -> [String]? {
         
-        var reachable: Bool = true
-        
-        if let reachabilityManager = Alamofire.NetworkReachabilityManager(host: "sdk.split.io/api/version") {
-            
-            if (!reachabilityManager.isReachable)  {
-                reachable = false
-            }
-        }
-        
-        if !reachable {
-            
-            return (self.mySegmentCache?.getSegments(key: user))!
-            
+        if policy == .cacheOnly || !self.restClient.isSdkServerAvailable() {
+            return self.mySegmentCache?.getSegments(key: user)
         } else {
-            
             let semaphore = DispatchSemaphore(value: 0)
             var requestResult: DataResult<[String]>?
             restClient.getMySegments(user: user) { result in
@@ -47,14 +33,11 @@ public final class HttpMySegmentsFetcher: NSObject, MySegmentsChangeFetcher {
                 semaphore.signal()
             }
             semaphore.wait()
-            
-            let segments = try requestResult!.unwrap()
+            guard let segments = try requestResult?.unwrap() else {
+                return nil
+            }
             mySegmentCache?.addSegments(segmentNames: segments, key: user)
-
             return segments
-            
         }
-        
     }
-
 }

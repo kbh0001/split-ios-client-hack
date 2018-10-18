@@ -2,340 +2,196 @@
 //  ImpressionManager.swift
 //  Split
 //
-//  Created by Natalia  Stele on 03/01/2018.
+//  Created by Javier Avrudsky on 06/14/2018.
 //
+// ToDo: Replace with generic implemention for track events and impressions. Temporal implementation.
 
 import Foundation
-import Alamofire
-import SwiftyJSON
-import UIKit
 
-public typealias ImpressionsBulk = [ImpressionsHit]
+struct ImpressionManagerConfig {
+    var pushRate: Int! // Interval
+    var impressionsPerPush: Int64! // ChunkSize
+}
 
-public class ImpressionManager {
+class ImpressionManager {
     
-    public var interval: Int
-    public var impressionsChunkSize: Int64
-    private var featurePollTimer: DispatchSourceTimer?
-    public weak var dispatchGroup: DispatchGroup?
-    public var impressionStorage: [String:[ImpressionDTO]] = [:]
+    private let kImpressionsPrefix: String = "impressions_"
+    private let kImpressionsFileName: String = "impressions_"
+    private let kMaxHitAttempts = 3
+    
     private var fileStorage = FileStorage()
-    private var impressionsFileStorage: ImpressionsFileStorage?
-    public static let EMPTY_JSON: String = "[]"
-    private var impressionAccum: Int = 0
-
-    public static let shared: ImpressionManager = {
-        
-        let instance = ImpressionManager()
-        return instance;
-    }()
+    private var impressionsFileStorage: FileStorageManager?
     
-    public init(interval: Int = 10, dispatchGroup: DispatchGroup? = nil, impressionsChunkSize: Int64 = 100) {
-        self.interval = interval
-        self.dispatchGroup = dispatchGroup
-        self.impressionsFileStorage = ImpressionsFileStorage(storage: self.fileStorage)
-        self.impressionsChunkSize = impressionsChunkSize
+    private var currentImpressionsHit = SynchronizedDictionaryWrapper<String, Impression>()
+    private var impressionsHits = [String: ImpressionsHit]()
+    
+    private let restClient = RestClient()
+    private var pollingManager: PollingManager!
+    
+    private var impressionsPushRate: Int!
+    private var impressionsPerPush: Int64!
+    
+    init(dispatchGroup: DispatchGroup? = nil, config: ImpressionManagerConfig) {
+        self.impressionsFileStorage = FileStorageManager(storage: self.fileStorage, filePrefix: kImpressionsPrefix)
+        self.impressionsFileStorage?.limitAttempts = false
+        self.impressionsPushRate = config.pushRate
+        self.impressionsPerPush = config.impressionsPerPush
+        self.createPollingManager(dispatchGroup: dispatchGroup)
         subscribeNotifications()
     }
     
-    //------------------------------------------------------------------------------------------------------------------
-    public func sendImpressions(fileContent: Data?, fileName: String) {
-        
-        let composeRequest = createRequest(content: fileContent, fileName: fileName)
-        let request = composeRequest["request"] as! URLRequest
-        let filename: String = composeRequest["fileName"] as! String
-        var reachable: Bool = true
-        
-        if let reachabilityManager = Alamofire.NetworkReachabilityManager(host: "sdk.split.io/api/version") {
-            
-            if (!reachabilityManager.isReachable)  {
-                
-                reachable = false
-                
-            }
-            
+    deinit {
+        #if swift(>=4.2)
+            NotificationCenter.default.removeObserver(self, name: UIApplication.didEnterBackgroundNotification, object: nil)
+            NotificationCenter.default.removeObserver(self, name: UIApplication.didBecomeActiveNotification, object: nil)
+        #else
+            NotificationCenter.default.addObserver(self, selector: #selector(applicationDidEnterBackground), name: .UIApplicationDidEnterBackground, object: nil)
+            NotificationCenter.default.addObserver(self, selector: #selector(applicationDidBecomeActive), name: .UIApplicationDidBecomeActive, object: nil)
+        #endif
+    }
+}
+
+// MARK: Public
+extension ImpressionManager {
+    func start(){
+        pollingManager.start()
+    }
+    
+    func stop(){
+        pollingManager.stop()
+    }
+
+    func appendImpression(impression: Impression, splitName: String) {
+        currentImpressionsHit.appendValue(impression, toKey: splitName)
+        if currentImpressionsHit.count == impressionsPerPush {
+            appendHit()
         }
+    }
+    
+    func appendHitAndSendAll(){
+        appendHit()
+        sendImpressions()
+    }
+}
+
+// MARK: Private
+extension ImpressionManager {
+    
+    private func appendHit(){
+        if currentImpressionsHit.count == 0 { return }
+        let newHit = ImpressionsHit(identifier: UUID().uuidString, impressions: currentImpressionsTests())
+        impressionsHits[newHit.identifier] = newHit
+        currentImpressionsHit.removeAll()
+    }
+    
+    private func createPollingManager(dispatchGroup: DispatchGroup?){
+        var config = PollingManagerConfig()
+        config.rate = self.impressionsPushRate
         
-        if !reachable {
-            
-            Logger.v("Saving impressions")
-            saveImpressionsToDisk()
-            
-        } else {
-            
-            Alamofire.request(request).debugCurl().validate(statusCode: 200..<300).response {  [weak self] response in
-                
-                guard let strongSelf = self else {
-                    return
+        pollingManager = PollingManager(
+            dispatchGroup: dispatchGroup,
+            config: config,
+            triggerAction: {[weak self] in
+                if let strongSelf = self {
+                    strongSelf.appendHitAndSendAll()
                 }
-                
-                if response.error != nil && reachable {
-                    
-                    strongSelf.impressionsFileStorage?.saveImpressions(fileName: filename)
-                    Logger.e("Impressions error : \(String(describing: response.error))")
-                    
-                    
-                } else {
-                    
+            }
+        )
+    }
+    
+    private func sendImpressions() {
+        for (_, impressionsHit) in impressionsHits {
+            sendImpressions(impressionsHit: impressionsHit)
+        }
+    }
+    
+    private func sendImpressions(impressionsHit: ImpressionsHit) {
+        if impressionsHits.count == 0 { return }
+        if restClient.isSdkServerAvailable() {
+            impressionsHit.addAttempt()
+            
+            restClient.sendImpressions(impressions: impressionsHit.impressions, completion: { result in
+                do {
+                    let _ = try result.unwrap()
                     Logger.d("Impressions posted successfully")
-                    strongSelf.cleanImpressions(fileName: filename)
-                    
+                    self.impressionsHits.removeValue(forKey: impressionsHit.identifier)
+                } catch {
+                    Logger.e("Impressions error: \(String(describing: error))")
+                    if impressionsHit.attempts >= self.kMaxHitAttempts {
+                        self.impressionsHits.removeValue(forKey: impressionsHit.identifier)
+                    }
                 }
-                
-            }
-            
-        }
-        
-    }
-    //------------------------------------------------------------------------------------------------------------------
-    
-    public func createImpressionsBulk() -> ImpressionsBulk {
-        
-        var hits: [ImpressionsHit] = []
-        
-        for key in impressionStorage.keys {
-            
-            let array = impressionStorage[key]
-            let hit = ImpressionsHit()
-            hit.keyImpressions = array
-            hit.testName = key
-            hits.append(hit)
-            
-        }
-        
-        return hits
-    }
-    
-    //------------------------------------------------------------------------------------------------------------------
-    private func startPollingForImpressions() {
-        
-        let queue = DispatchQueue(label: "split-polling-queue")
-        featurePollTimer = DispatchSource.makeTimerSource(queue: queue)
-        featurePollTimer!.schedule(deadline: .now(), repeating: .seconds(self.interval))
-        featurePollTimer!.setEventHandler { [weak self] in
-            guard let strongSelf = self else {
-                return
-            }
-            guard strongSelf.featurePollTimer != nil else {
-                strongSelf.stopPollingForSendImpressions()
-                return
-            }
-            strongSelf.pollForSendImpressions()
-        }
-        featurePollTimer!.resume()
-    }
-    //------------------------------------------------------------------------------------------------------------------
-    
-    
-    private func stopPollingForSendImpressions() {
-        featurePollTimer?.cancel()
-        featurePollTimer = nil
-    }
-    
-    private func pollForSendImpressions() {
-        
-        dispatchGroup?.enter()
-        let queue = DispatchQueue(label: "split-impressions-queue")
-        queue.async { [weak self] in
-            guard let strongSelf = self else {
-                return
-            }
-            strongSelf.sendImpressionsFromFile()
-            strongSelf.dispatchGroup?.leave()
+            })
         }
     }
-    //------------------------------------------------------------------------------------------------------------------
     
-    public func start() {
-        startPollingForImpressions()
-    }
-    //------------------------------------------------------------------------------------------------------------------
-    
-    
-    public func stop() {
-        stopPollingForSendImpressions()
-    }
-    //------------------------------------------------------------------------------------------------------------------
-    
-    private func cleanImpressions(fileName: String) {
-        
-        impressionStorage = [:]
-        impressionsFileStorage?.deleteImpressions(fileName: fileName)
-        
-    }
-    //------------------------------------------------------------------------------------------------------------------
-    
-    func saveImpressions(json: String) {
-        
-        impressionsFileStorage?.saveImpressions(impressions: json)
-        impressionStorage = [:]
-        
-    }
-    //------------------------------------------------------------------------------------------------------------------
-    
-    func createRequest(content: Data?, fileName: String) -> [String:Any] {
-        
-        // Configure paramaters
-        let url: URL = EnvironmentTargetManager.GetImpressions().url
-        var headers: HTTPHeaders = [:]
-        headers["splitsdkversion"] = Version.toString()
-        headers["authorization"] = "Bearer " + SecureDataStore.shared.getToken()!
-        headers["content-type"] = "application/json"
-        
-        //Create new request
-        var request = URLRequest(url: url)
-        request.httpMethod = HTTPMethod.post.rawValue
-        request.allHTTPHeaderFields = headers
-        
-        
-        //Create json file with impressions
-        let encodedData = content
-        
-        request.httpBody = encodedData
-        
-        var composeRequest : [String:Any] = [:]
-        
-        composeRequest["request"] = request
-        composeRequest["fileName"] = fileName
-        
-        return composeRequest
-        
-    }
-    //------------------------------------------------------------------------------------------------------------------
-    
-    
-    func createEncodedImpressions() -> Data? {
-        
-        //Create data set with all the impressions
-        let hits: [ImpressionsHit] = createImpressionsBulk()
-        
-        //Create json file with impressions
-        let encodedData = try? JSONEncoder().encode(hits)
-        
-        return encodedData
-    }
-    //------------------------------------------------------------------------------------------------------------------
-    
-    func createImpressionsJsonString() -> String {
-        
-        //Create json file with impressions
-        let encodedData = createEncodedImpressions()
-        
-        let json = String(data: encodedData!, encoding: String.Encoding(rawValue: String.Encoding.utf8.rawValue))
-        if let json = json {
-            
-            return json
-            
-        } else {
-            
-            return " "
+    private func currentImpressionsTests() -> [ImpressionsTest] {
+        return currentImpressionsHit.all.map { key, impressions in
+            return ImpressionsTest(testName: key, keyImpressions: impressions)
         }
-        
     }
-    //------------------------------------------------------------------------------------------------------------------
-    
-    func sizeOfJsonString(impression: ImpressionDTO) -> Int {
-        
-        let encodedData = try? JSONEncoder().encode(impression)
-        
-        let json = String(data: encodedData!, encoding: String.Encoding(rawValue: String.Encoding.utf8.rawValue))
-        if let json = json {
-            
-            return json.utf8.count
-        }
-        
-        
-        return 0
-        
-    }
-    //------------------------------------------------------------------------------------------------------------------
-    
-    public func appendImpressions(impression: ImpressionDTO, splitName: String) {
-        
-        var impressionsArray = impressionStorage[splitName]
-        var shouldSaveToDisk = false
-        //calculate size
-        let impressionSize: Int = sizeOfJsonString(impression: impression)
-        impressionAccum = impressionAccum + impressionSize
-        
-        if impressionAccum >= impressionsChunkSize {
-            
-            shouldSaveToDisk = true
-            impressionAccum = 0
-            
-        }
-        
-        if  impressionsArray != nil {
-            
-            impressionsArray?.append(impression)
-            impressionStorage[splitName] = impressionsArray
-            
-            
-        } else {
-            
-            impressionsArray = []
-            impressionsArray?.append(impression)
-            impressionStorage[splitName] = impressionsArray
-            
-        }
-        
-        if shouldSaveToDisk {
-            
-            saveImpressionsToDisk()
-            
-        }
-        
-    }
-    //------------------------------------------------------------------------------------------------------------------
     
     func saveImpressionsToDisk() {
+        let impressionsFile = ImpressionsFile()
+        impressionsFile.oldHits = impressionsHits
         
-        let jsonImpression = createImpressionsJsonString()
-        
-        if jsonImpression != ImpressionManager.EMPTY_JSON {
-            
-            saveImpressions(json: jsonImpression)
-            
+        if currentImpressionsHit.count > 0 {
+            let newHit = ImpressionsHit(identifier: UUID().uuidString, impressions: currentImpressionsTests())
+            impressionsFile.currentHit = newHit
         }
-        
+
+        do {
+            let json = try Json.encodeToJson(impressionsFile)
+            impressionsFileStorage?.save(content: json, as: kImpressionsFileName)
+        } catch {
+            Logger.e("Could not save impressions hits)")
+        }
     }
-    //------------------------------------------------------------------------------------------------------------------
     
-    func sendImpressionsFromFile() {
-        
-        if let impressionsFiles = impressionsFileStorage?.readImpressions() {
-            
-            for fileName in impressionsFiles.keys {
-                
-                let file = impressionsFiles[fileName]
-                
-                let encodedData = file?.data(using: .utf8)
-                
-                sendImpressions(fileContent: encodedData,fileName: fileName)
-                
-                
+    func loadImpressionsFromDisk(){
+        guard let hitsJson = impressionsFileStorage?.read(fileName: kImpressionsFileName) else {
+            return
+        }
+        if hitsJson.count == 0 { return }
+        impressionsFileStorage?.delete(fileName: kImpressionsFileName)
+        do {
+            let hitsFile = try Json.encodeFrom(json: hitsJson, to: ImpressionsFile.self)
+            impressionsHits = hitsFile.oldHits ?? [String: ImpressionsHit]()
+            currentImpressionsHit = SynchronizedDictionaryWrapper()
+            if let tests = hitsFile.currentHit?.impressions {
+                for test in tests {
+                    for impresion in test.keyImpressions {
+                        currentImpressionsHit.appendValue(impresion, toKey: test.testName)
+                    }
+                }
             }
             
+        } catch {
+            Logger.e("Error while loading Impression impressions from disk")
+            return
         }
-        
     }
-    //------------------------------------------------------------------------------------------------------------------
-    @objc func applicationDidEnterBackground(_ application: UIApplication) {
-        
-        Logger.d("Saving impressions to disk")
+
+}
+
+// MARK: Background / Foreground
+extension ImpressionManager {
+    @objc func applicationDidEnterBackground() {
+        Logger.d("Saving Impression to disk")
         saveImpressionsToDisk()
     }
-    //------------------------------------------------------------------------------------------------------------------
+    
+    @objc func applicationDidBecomeActive() {
+        loadImpressionsFromDisk()
+    }
+    
     func subscribeNotifications() {
-        
-        NotificationCenter.default.addObserver(self, selector: #selector(applicationDidEnterBackground(_:)), name: .UIApplicationDidEnterBackground, object: nil)
-
+        #if swift(>=4.2)
+            NotificationCenter.default.addObserver(self, selector: #selector(applicationDidEnterBackground), name: UIApplication.didEnterBackgroundNotification, object: nil)
+            NotificationCenter.default.addObserver(self, selector: #selector(applicationDidBecomeActive), name: UIApplication.didBecomeActiveNotification, object: nil)
+        #else
+            NotificationCenter.default.addObserver(self, selector: #selector(applicationDidEnterBackground), name: .UIApplicationDidEnterBackground, object: nil)
+            NotificationCenter.default.addObserver(self, selector: #selector(applicationDidBecomeActive), name: .UIApplicationDidBecomeActive, object: nil)
+        #endif
     }
-    //------------------------------------------------------------------------------------------------------------------
-    deinit {
-        
-        NotificationCenter.default.removeObserver(self, name: .UIApplicationDidEnterBackground, object: nil)
-
-    }
-    //------------------------------------------------------------------------------------------------------------------
 }
