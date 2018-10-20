@@ -29,10 +29,11 @@ public class SecureDataStore {
     // MARK: - save access token
     
     public func setToken(token: String){
+        defer {
+            tokenSemaphore.unlock()
+        }
         tokenSemaphore.lock()
       
-        
-        
         if let token = getToken() {
             Logger.d(token)
             removeToken()
@@ -42,7 +43,6 @@ public class SecureDataStore {
         
         guard let valueData = token.data(using: String.Encoding.utf8) else {
             Logger.e("Error saving text to Keychain")
-            tokenSemaphore.unlock()
             return
         }
         
@@ -64,12 +64,15 @@ public class SecureDataStore {
             Logger.d("Saved to keychain successfully.")
             
         }
-        tokenSemaphore.unlock()
+        
     }
     
     // MARK: - retrieve access token
     
     public func getToken() -> String? {
+        defer {
+            tokenSemaphore.unlock()
+        }
         tokenSemaphore.lock()
         
         if let token = self.token {
@@ -97,17 +100,19 @@ public class SecureDataStore {
         if lastResultCode == noErr, let dic = result as? [String:Any],let data = dic[kSecValueData as String] as? Data {
             
             if let token = String(data: data, encoding: .utf8) {
-                tokenSemaphore.unlock()
                 return token
             }
         }
-        tokenSemaphore.unlock()
+        
         return nil
     }
     
     // MARK: - delete access token
     
     public func removeToken() {
+        defer {
+            tokenSemaphore.unlock()
+        }
         tokenSemaphore.lock()
         
         let queryDelete: [String: Any] = [
@@ -126,9 +131,5 @@ public class SecureDataStore {
             Logger.d("Removed successfully from the keychain")
             
         }
-        
-        tokenSemaphore.unlock()
-        
     }
-    
 }
