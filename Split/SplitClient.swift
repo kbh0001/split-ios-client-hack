@@ -51,7 +51,7 @@ public final class SplitClient: NSObject, SplitClientProtocol {
         var impressionsConfig = ImpressionManagerConfig()
         impressionsConfig.pushRate = config.impressionRefreshRate
         impressionsConfig.impressionsPerPush = config.impressionsChunkSize
-        splitImpressionManager = ImpressionManager(config: impressionsConfig)
+        splitImpressionManager = ImpressionManager(config: impressionsConfig, clientType: config.clientType)
 
         self.initialized = false
 

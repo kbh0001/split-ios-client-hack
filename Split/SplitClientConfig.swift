@@ -11,6 +11,9 @@ import Foundation
 public typealias SplitImpressionListener = (SplitImpression) -> Void
 
 public class SplitClientConfig: NSObject {
+    
+    
+    public var clientType: String = "unknown"
 
     /**
      How many seconds to wait before triggering a timeout event when the SDK is being initialized. Default: -1 (means no timeout)

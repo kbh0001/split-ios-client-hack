@@ -15,8 +15,8 @@ struct ImpressionManagerConfig {
 
 class ImpressionManager {
     
-    private let kImpressionsPrefix: String = "impressions_"
-    private let kImpressionsFileName: String = "impressions_"
+    private var kImpressionsPrefix: String = "impressions_"
+    private var kImpressionsFileName: String = "impressions_"
     private let kMaxHitAttempts = 3
     
     private var fileStorage = FileStorage()
@@ -31,12 +31,14 @@ class ImpressionManager {
     private var impressionsPushRate: Int!
     private var impressionsPerPush: Int64!
     
-    init(dispatchGroup: DispatchGroup? = nil, config: ImpressionManagerConfig) {
+    init(dispatchGroup: DispatchGroup? = nil, config: ImpressionManagerConfig, clientType: String) {
         self.impressionsFileStorage = FileStorageManager(storage: self.fileStorage, filePrefix: kImpressionsPrefix)
         self.impressionsFileStorage?.limitAttempts = false
         self.impressionsPushRate = config.pushRate
         self.impressionsPerPush = config.impressionsPerPush
         self.createPollingManager(dispatchGroup: dispatchGroup)
+        self.kImpressionsPrefix = clientType + "_" + kImpressionsPrefix
+        self.kImpressionsFileName = clientType + "_" + kImpressionsFileName
         subscribeNotifications()
     }
     
